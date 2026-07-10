@@ -1,8 +1,10 @@
 import regex as re
 from tqdm import tqdm
+import json
+import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
-import json
+
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 
 def count_pre_tokenize(file_path:str, start:int, end:int, regex_pattern:str, special_tokens:list[str], q:Queue):
@@ -193,18 +195,15 @@ class Tokenizer:
 		else:
 			text = [text]
 
-		if self.verbose: print("pre_tokenization")
 		pre_tokens = []
-		for split in tqdm(text):
+		for split in text:
 			if split in self.special_tokens:
 				pre_tokens.append(split)
 			else:
 				pre_tokens.extend(re.findall(self.PAT, split))
-		
-		if self.verbose: print("starting encoding!")
 
 		output_tokens = []
-		for pre_tok in tqdm(pre_tokens):
+		for pre_tok in pre_tokens:
 			tokens = self._to_utf8(pre_tok)
 			assert type(tokens) == tuple
 			if tokens in self.pre_token_cache:
@@ -253,6 +252,20 @@ class Tokenizer:
 		for block in iterable:
 			tokens = self.encode(block)
 			yield from tokens
+	
+	def encode_large_file(self, large_file_path:str, output_path:str):
+		with open(large_file_path) as f:
+			with open(output_path, "wb") as o:
+				token_encode_generator = self.encode_iterable(f)
+
+				buffer = []
+				for tok_l in tqdm(token_encode_generator):
+					buffer.append(tok_l)
+
+					if len(buffer) > 10_000:
+						o.write(np.array(buffer, dtype=np.uint16).tobytes())
+						buffer = []
+				o.write(np.array(buffer, dtype=np.uint16).tobytes())
 
 	def decode(self, ids: list[int]) -> str:
 		byte_string = b''.join([self.vocab[id] for id in ids])
@@ -291,26 +304,51 @@ if __name__ == "__main__":
 
 	with open("./data/TinyStoriesV2-GPT4-valid.txt") as f:
 		text = f.read()
-	# text = text[:1000]
+	text = text[:10000000]
+
+	bytes_text = text.encode("utf-8")
+	bytes_n = len(bytes_text)
+	print(bytes_n)
 
 	print("Starting!")
-	# tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
-	tok = Tokenizer.train("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=1000, special_tokens=["<|endoftext|>"], num_processes=10)
-	test_encode_1 = tok.encode(text)
+	tok = Tokenizer.train("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=2000, special_tokens=["<|endoftext|>"], num_processes=10)
 
-	vocab_path="test1_vocab.json"
-	merges_path="test1_merges.json"
+	tok.encode_large_file("./data/TinyStoriesV2-GPT4-valid.txt", "a_out.bin")
 
-	tok.export_to_files(vocab_path, merges_path)
-	del tok
+	# import time
+	# print("starting my tok")
+	# t0 = time.time()
+	# test_encode_1 = tok.encode(text)
+	# t1 = time.time()
+	# total = t1-t0
+	# print(f"my time: {total}")
 
-	tok2 = Tokenizer.from_files(vocab_path, merges_path, special_tokens=["<|endoftext|>"])
-	test_encode_2 = tok2.encode(text)
+	# print(f"{bytes_n/total} bytes/second")
 
-	print(test_encode_1)
-	print(test_encode_2)
-	print(test_encode_1 == test_encode_2)
-	assert test_encode_1 == test_encode_2
+	# print("starting tiktoken")
+	# t0 = time.time()
+	# test_encode_1 = tok.encode(text)
+	# t1 = time.time()
+	# total = t1-t0
+	# print(f"my time: {total}")
+
+	# print(f"{bytes_n/total} bytes/second")
+
+	
+
+	# vocab_path="test1_vocab.json"
+	# merges_path="test1_merges.json"
+
+	# tok.export_to_files(vocab_path, merges_path)
+	# del tok
+
+	# tok2 = Tokenizer.from_files(vocab_path, merges_path, special_tokens=["<|endoftext|>"])
+	# test_encode_2 = tok2.encode(text)
+
+	# print(test_encode_1)
+	# print(test_encode_2)
+	# print(test_encode_1 == test_encode_2)
+	# assert test_encode_1 == test_encode_2
 
 	
 	# vocab = {k:list(v) for k, v in vocab.items()}
