@@ -203,7 +203,7 @@ class Tokenizer:
 		if self.verbose: print("starting encoding!")
 
 		output_tokens = []
-		for tokens in tqdm(pre_token_bytes):
+		for pre_tok in tqdm(pre_tokens):
 			tokens = self._to_utf8(pre_tok)
 			assert type(tokens) == tuple
 			if tokens in self.pre_token_cache:
@@ -248,10 +248,12 @@ class Tokenizer:
 				output_tokens.extend(old_tokens)
 		return output_tokens
 	
-	def from_files(cls, vocab_filepath:str, merges_filepath:str, special_tokens=None):
-		pass
-					
 	def encode_iterable(self, iterable):
+		for block in iterable:
+			tokens = self.encode(block)
+			yield from tokens
+	
+	def from_files(cls, vocab_filepath:str, merges_filepath:str, special_tokens=None):
 		pass
 
 	def decode(self, ids: list[int]) -> str:
@@ -259,43 +261,72 @@ class Tokenizer:
 		return byte_string.decode(encoding="utf-8", errors="replace")
 	
 if __name__ == "__main__":
-	vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-train.txt", vocab_size=2000, special_tokens=["<|endoftext|>"], num_processes=10)
+	# vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=20000, special_tokens=["<|endoftext|>"], num_processes=10)
 
-	tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
+	# tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
 	
+	# with open("./data/TinyStoriesV2-GPT4-train.txt") as f:
+	# 	text = f.read()
+	# text = text[:int(1e7)]
+	# encode = tok.encode(text)
+	# decode = tok.decode(encode)
+	# print(text == decode)
+
+	import json
+	import os
+	import resource
+	import sys
+
+	import psutil
+	import pytest
+	import tiktoken
+	import time
+
+	from tests.adapters import get_tokenizer
+	from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+
+	from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
+
+	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+
+	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+
+	# TEST 1
+	reference_tokenizer = tiktoken.get_encoding("gpt2")
+	tokenizer = get_tokenizer_from_vocab_merges_path(
+		vocab_path=VOCAB_PATH,
+		merges_path=MERGES_PATH,
+		special_tokens=["<|endoftext|>"]
+	)
+
 	with open("./data/TinyStoriesV2-GPT4-train.txt") as f:
 		text = f.read()
+	# text = text[:int(1e9)]
 	
-	encode = tok.encode(text)
-	decode = tok.decode(encode)
-	print(text == decode)
+	print("starting tiktoken")
+	t0 = time.time()
+	encode2 = reference_tokenizer.encode(text, allowed_special={'<|endoftext|>'})
+	t1 = time.time()
+	total = t1-t0
+	print(f"tiktoken time: {total}")
 
-	# import json
-	# import os
-	# import resource
-	# import sys
+	print("my tokenizer")
+	t0 = time.time()
+	encode = tokenizer.encode(text)
+	t1 = time.time()
+	total = t1-t0
+	print(f"My tokenizer time: {total}")
 
-	# import psutil
-	# import pytest
-	# import tiktoken
 
-	# from tests.adapters import get_tokenizer
-	# from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+	
 
-	# from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
 
-	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	# # TEST 1
-	# reference_tokenizer = tiktoken.get_encoding("gpt2")
-	# tokenizer = get_tokenizer_from_vocab_merges_path(
-	# 	vocab_path=VOCAB_PATH,
-	# 	merges_path=MERGES_PATH,
-	# )
+
+
 	# corpus_path = FIXTURES_PATH / "address.txt"
 	# with open(corpus_path) as f:
 	# 	corpus_contents = f.read()
@@ -303,15 +334,6 @@ if __name__ == "__main__":
 	# # corpus_contents = corpus_contents[:1500]
 	# reference_ids = reference_tokenizer.encode(corpus_contents)
 	# ids = tokenizer.encode(corpus_contents)
-
-	# # print("decoding token 15137")
-	# # print(reference_tokenizer.decode([15137]))
-
-	# # print("this is a print to check out test_address_matches_tiktoken")
-	# # print(reference_ids)
-	# # print(ids)
-	# # print(reference_tokenizer.decode(reference_ids))
-	# # print(tokenizer.decode(ids))
 	# assert ids == reference_ids
 
 	# assert tokenizer.decode(ids) == corpus_contents
