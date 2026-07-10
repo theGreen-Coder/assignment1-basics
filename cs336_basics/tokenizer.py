@@ -167,6 +167,7 @@ class Tokenizer:
 		self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 		self.verbose = verbose
 
+		self.raw_bpe_merges = bpe_merges
 		self.bpe_merges = {(self.i_vocab[b1], self.i_vocab[b2]):self.i_vocab[b1 + b2] for (b1, b2) in bpe_merges}
 		self.bpe_merges_ranks = {(self.i_vocab[tu[0]], self.i_vocab[tu[1]]):idx for idx, tu in enumerate(bpe_merges)}
 
@@ -252,16 +253,75 @@ class Tokenizer:
 		for block in iterable:
 			tokens = self.encode(block)
 			yield from tokens
-	
-	def from_files(cls, vocab_filepath:str, merges_filepath:str, special_tokens=None):
-		pass
 
 	def decode(self, ids: list[int]) -> str:
 		byte_string = b''.join([self.vocab[id] for id in ids])
 		return byte_string.decode(encoding="utf-8", errors="replace")
 	
+	def export_to_files(self, vocab_path:str, merges_path:str):
+		vocab_export = {k:list(v) for k, v in self.vocab.items()}
+		merges_export = [(list(m[0]), list(m[1])) for m in self.raw_bpe_merges]
+
+		with open(vocab_path, "w") as f:
+			json.dump(vocab_export, f, indent=2)
+
+		with open(merges_path, "w") as f:
+			json.dump(merges_export, f, indent=2)
+	
+	@classmethod
+	def from_files(cls, vocab_path:str, merges_path:str, special_tokens=None, verbose=True):
+		with open(vocab_path, 'r') as f: 
+			vocab_json = json.load(f)
+		
+		with open(merges_path, 'r') as f: 
+			merges_json = json.load(f)
+		
+		vocab = {int(k):bytes(v) for k,v in vocab_json.items()}
+		merges = [(bytes(b1), bytes(b2)) for b1, b2 in merges_json]
+		
+		return Tokenizer(vocab, merges, special_tokens, verbose)
+	
+	@classmethod
+	def train(cls, input_path:str, vocab_size:int, special_tokens:list[str], num_processes=1, verbose=True):
+		vocab, merges = train_bpe_tokenizer(input_path, vocab_size, special_tokens, num_processes, verbose)
+		return Tokenizer(vocab, merges, special_tokens, verbose)
+	
 if __name__ == "__main__":
-	# vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=20000, special_tokens=["<|endoftext|>"], num_processes=10)
+	# vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=1000, special_tokens=["<|endoftext|>"], num_processes=10)
+
+	with open("./data/TinyStoriesV2-GPT4-valid.txt") as f:
+		text = f.read()
+	# text = text[:1000]
+
+	print("Starting!")
+	# tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
+	tok = Tokenizer.train("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=1000, special_tokens=["<|endoftext|>"], num_processes=10)
+	test_encode_1 = tok.encode(text)
+
+	vocab_path="test1_vocab.json"
+	merges_path="test1_merges.json"
+
+	tok.export_to_files(vocab_path, merges_path)
+	del tok
+
+	tok2 = Tokenizer.from_files(vocab_path, merges_path, special_tokens=["<|endoftext|>"])
+	test_encode_2 = tok2.encode(text)
+
+	print(test_encode_1)
+	print(test_encode_2)
+	print(test_encode_1 == test_encode_2)
+	assert test_encode_1 == test_encode_2
+
+	
+	# vocab = {k:list(v) for k, v in vocab.items()}
+	# print(vocab[0])
+	# with open("vocab_test.json", "w") as f:
+	# 	json.dump(vocab, f, indent=2)
+	
+	# merges2 = [(list(m[0]), list(m[1])) for m in merges]
+	# with open("merges_test.json", "w") as f:
+	# 	json.dump(merges2, f, indent=2)
+
 
 	# tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
 	
@@ -272,52 +332,52 @@ if __name__ == "__main__":
 	# decode = tok.decode(encode)
 	# print(text == decode)
 
-	import json
-	import os
-	import resource
-	import sys
+	# import json
+	# import os
+	# import resource
+	# import sys
 
-	import psutil
-	import pytest
-	import tiktoken
-	import time
+	# import psutil
+	# import pytest
+	# import tiktoken
+	# import time
 
-	from tests.adapters import get_tokenizer
-	from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+	# from tests.adapters import get_tokenizer
+	# from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
-	from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
+	# from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
 
-	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	# TEST 1
-	reference_tokenizer = tiktoken.get_encoding("gpt2")
-	tokenizer = get_tokenizer_from_vocab_merges_path(
-		vocab_path=VOCAB_PATH,
-		merges_path=MERGES_PATH,
-		special_tokens=["<|endoftext|>"]
-	)
+	# # TEST 1
+	# reference_tokenizer = tiktoken.get_encoding("gpt2")
+	# tokenizer = get_tokenizer_from_vocab_merges_path(
+	# 	vocab_path=VOCAB_PATH,
+	# 	merges_path=MERGES_PATH,
+	# 	special_tokens=["<|endoftext|>"]
+	# )
 
-	with open("./data/TinyStoriesV2-GPT4-train.txt") as f:
-		text = f.read()
-	# text = text[:int(1e9)]
+	# with open("./data/TinyStoriesV2-GPT4-train.txt") as f:
+	# 	text = f.read()
+	# # text = text[:int(1e9)]
 	
-	print("starting tiktoken")
-	t0 = time.time()
-	encode2 = reference_tokenizer.encode(text, allowed_special={'<|endoftext|>'})
-	t1 = time.time()
-	total = t1-t0
-	print(f"tiktoken time: {total}")
+	# print("starting tiktoken")
+	# t0 = time.time()
+	# encode2 = reference_tokenizer.encode(text, allowed_special={'<|endoftext|>'})
+	# t1 = time.time()
+	# total = t1-t0
+	# print(f"tiktoken time: {total}")
 
-	print("my tokenizer")
-	t0 = time.time()
-	encode = tokenizer.encode(text)
-	t1 = time.time()
-	total = t1-t0
-	print(f"My tokenizer time: {total}")
+	# print("my tokenizer")
+	# t0 = time.time()
+	# encode = tokenizer.encode(text)
+	# t1 = time.time()
+	# total = t1-t0
+	# print(f"My tokenizer time: {total}")
 
 
 	
