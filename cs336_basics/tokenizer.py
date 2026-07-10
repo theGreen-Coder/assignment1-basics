@@ -28,11 +28,11 @@ def count_pre_tokenize(file_path:str, start:int, end:int, regex_pattern:str, spe
 	q.put(process_dict_binary)
 
 def merge_dictionaries(dict_list):
-    merged = defaultdict(int)
-    for d in dict_list:
-        for key, value in d.items():
-            merged[key] += value
-    return dict(merged)
+	merged = defaultdict(int)
+	for d in dict_list:
+		for key, value in d.items():
+			merged[key] += value
+	return dict(merged)
 
 def get_all_pairs(t:tuple):
 	return [(tok1, tok2) for tok1, tok2 in zip(t[:-1], t[1:])]
@@ -163,32 +163,41 @@ class Tokenizer:
 		self.vocab = vocab
 		self.b_to_tok = {v:k for k, v in vocab.items()}
 		self.bpe_merges = [(self.b_to_tok[b1], self.b_to_tok[b2]) for (b1, b2) in bpe_merges]
-		self.special_tokens = special_tokens
+		self.special_tokens = set() if special_tokens is None else set(special_tokens)
 		self.pre_token_cache = {}
 		self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
-		# print(self.vocab)
-		# print(self.b_to_tok)
-		# print()
-		# print()
-
-
 	def encode(self, text:str) -> list[int]:
-		if self.special_tokens is not None and self.special_tokens != []:
-			text = re.split("|".join([re.escape(tok) for tok in self.special_tokens]), text)
+		if self.special_tokens is not None and len(self.special_tokens) > 0:
+			print("am I doing this?")
+			text = re.split("(" + "|".join([re.escape(tok) for tok in self.special_tokens]) + ")", text)
 
 		pre_tokens = []
 		for split in tqdm(text):
-			pre_tokens.extend(re.findall(self.PAT, split))
+			if split in self.special_tokens:
+				print("am I doing this?2")
+				pre_tokens.append(split)
+			else:
+				pre_tokens.extend(re.findall(self.PAT, split))
 		
 		pre_token_bytes = []
 		for pre_tok in pre_tokens:
-			tmp = []
-			pre_tok_bytes = pre_tok.encode("utf-8")
-			for i in range(len(pre_tok_bytes)):
-				tmp.append(self.b_to_tok[pre_tok_bytes[i:i+1]])
-			pre_token_bytes.append(tuple(tmp))
-
+			print(pre_tok)
+			if pre_tok in self.special_tokens:
+				print("am I doing this?3")
+				print(pre_tok)
+				pre_token_bytes.append((self.b_to_tok[pre_tok.encode("utf-8")],))
+			else:
+				tmp = []
+				pre_tok_bytes = pre_tok.encode("utf-8")
+				for i in range(len(pre_tok_bytes)):
+					tmp.append(self.b_to_tok[pre_tok_bytes[i:i+1]])
+				pre_token_bytes.append(tuple(tmp))
+		
+		print("pritasfdoiasodf")
+		print(pre_token_bytes)
+		print()
+		print()
 	
 		output_tokens = []
 		for tokens in tqdm(pre_token_bytes):
@@ -203,7 +212,7 @@ class Tokenizer:
 						break
 					new_tokens = []
 
-					idx = 0 
+					idx = 0
 					while idx < len(old_tokens):
 						if idx == len(old_tokens)-1:
 							new_tokens.append(old_tokens[idx])
@@ -253,12 +262,29 @@ if __name__ == "__main__":
 	# text = text[:2068]
 	tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
 
-	split_special_tokens = re.split("|".join([re.escape(tok) for tok in ["<|endoftext|>"]]), text)
-	text2 = "".join(split_special_tokens)
 
-	print("Encoding!")
-	encoding = tok.encode(text)
-	# print(encoding)
-	decoding = tok.decode(encoding)
-	# print(decoding)
-	print(decoding == text2)
+	test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+	encoded_ids = tok.encode(test_string)
+	print(test_string)
+	print(f"Special token: {tok.b_to_tok["<|endoftext|>".encode("utf-8")]}")
+	print(encoded_ids)
+	tokenized_string = [tok.decode([x]) for x in encoded_ids]
+	# Ensure the special <|endoftext|> token is preserved
+	assert tokenized_string.count("<|endoftext|>") == 3
+
+	decoded_string = tok.decode(encoded_ids)
+	assert test_string == decoded_string
+
+
+
+
+
+	# split_special_tokens = re.split("|".join([re.escape(tok) for tok in ["<|endoftext|>"]]), text)
+	# text2 = "".join(split_special_tokens)
+
+	# print("Encoding!")
+	# encoding = tok.encode(text)
+	# # print(encoding)
+	# decoding = tok.decode(encoding)
+	# # print(decoding)
+	# print(decoding == text2)
