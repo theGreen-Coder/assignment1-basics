@@ -52,7 +52,7 @@ def find_max(pair_counts, vocab):
 					max_pair = pair
 	return max_pair
 
-def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str], num_processes=1) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str], num_processes=1, verbose=True) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
 	# Pattern for pre-tokenization
 	PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -87,7 +87,7 @@ def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str]
 		for pair in get_all_pairs(pre_tok_idx):
 			pair_counts[pair] = pair_counts.get(pair, 0) + count
 
-			if pair not in pair_to_pre_token.keys():
+			if pair not in pair_to_pre_token:
 				pair_to_pre_token[pair] = set()
 			pair_to_pre_token[pair].add(tuple(pre_tok_idx))
 	
@@ -98,7 +98,7 @@ def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str]
 		vocab[len(vocab)] = tok.encode("utf-8")
 
 	# BPE merges
-	print("starting BPE merges!")
+	if verbose: print("starting BPE merges!")
 	merges = []
 	for _ in tqdm(range(vocab_size - len(vocab))):
 		max_pair = find_max(pair_counts, vocab)
@@ -145,7 +145,7 @@ def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str]
 			for pair in get_all_pairs(new_pre_tok):
 				pair_counts[pair] = pair_counts.get(pair, 0) + old_pre_tok_freq
 
-				if pair not in pair_to_pre_token.keys():
+				if pair not in pair_to_pre_token:
 					pair_to_pre_token[pair] = set()
 				else:
 					if old_pre_tok in pair_to_pre_token[pair]:
@@ -159,15 +159,32 @@ def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str]
 	return vocab, merges
 
 class Tokenizer:
-	def __init__(self, vocab:dict[int, bytes], bpe_merges:list[tuple[bytes,bytes]], special_tokens=None):
+	def __init__(self, vocab:dict[int, bytes], bpe_merges:list[tuple[bytes,bytes]], special_tokens=None, verbose=True):
+		if verbose: print("Initializing Tokenizer!")
 		self.vocab = vocab
 		self.i_vocab = {v:k for k, v in vocab.items()}
 		self.special_tokens = set() if special_tokens is None else sorted(set(special_tokens), key=len, reverse=True)
-		self.pre_token_cache = {}
 		self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+		self.verbose = verbose
 
 		self.bpe_merges = {(self.i_vocab[b1], self.i_vocab[b2]):self.i_vocab[b1 + b2] for (b1, b2) in bpe_merges}
 		self.bpe_merges_ranks = {(self.i_vocab[tu[0]], self.i_vocab[tu[1]]):idx for idx, tu in enumerate(bpe_merges)}
+
+		self.b_int_to_token = {idx:self.i_vocab[bytes([idx])] for idx in range(256)}
+		self.pre_token_cache = {}
+		self.pre_token_utf8_cache = {}
+	
+	def _to_utf8(self, pre_tok):
+		if pre_tok in self.special_tokens:
+			return (self.i_vocab[pre_tok.encode("utf-8")],)
+		elif pre_tok in self.pre_token_utf8_cache:
+			return self.pre_token_utf8_cache[pre_tok]
+		else:
+			tmp = []
+			for b in pre_tok.encode("utf-8"):
+				tmp.append(self.b_int_to_token[b])
+			self.pre_token_utf8_cache[pre_tok] = tuple(tmp)
+			return tuple(tmp)
 
 	def encode(self, text:str) -> list[int]:
 		if self.special_tokens is not None and len(self.special_tokens) > 0:
@@ -175,6 +192,7 @@ class Tokenizer:
 		else:
 			text = [text]
 
+		if self.verbose: print("pre_tokenization")
 		pre_tokens = []
 		for split in tqdm(text):
 			if split in self.special_tokens:
@@ -182,33 +200,23 @@ class Tokenizer:
 			else:
 				pre_tokens.extend(re.findall(self.PAT, split))
 		
-		pre_token_bytes = []
-		for pre_tok in pre_tokens:
-			if pre_tok in self.special_tokens:
-				pre_token_bytes.append((self.i_vocab[pre_tok.encode("utf-8")],))
-			else:
-				tmp = []
-				pre_tok_bytes = pre_tok.encode("utf-8")
-				for i in range(len(pre_tok_bytes)):
-					tmp.append(self.i_vocab[pre_tok_bytes[i:i+1]])
-				pre_token_bytes.append(tuple(tmp))
+		if self.verbose: print("starting encoding!")
 
 		output_tokens = []
 		for tokens in tqdm(pre_token_bytes):
+			tokens = self._to_utf8(pre_tok)
 			assert type(tokens) == tuple
-			if tokens in self.pre_token_cache.keys():
+			if tokens in self.pre_token_cache:
 				output_tokens.extend(self.pre_token_cache[tokens])
 			else:
 				old_tokens = list(tokens)
 				
-				while True:
-					if len(old_tokens) == 1:
-						break
+				while len(old_tokens) > 1:
 					# find maximum ranked bpe pair
 					max_rank = float('inf')
 					max_pair = -1
 					for pair in get_all_pairs(old_tokens):
-						if pair in self.bpe_merges_ranks.keys():
+						if pair in self.bpe_merges_ranks:
 							rank = self.bpe_merges_ranks[pair]
 							if rank < max_rank:
 								max_rank = rank
@@ -251,30 +259,38 @@ class Tokenizer:
 		return byte_string.decode(encoding="utf-8", errors="replace")
 	
 if __name__ == "__main__":
-	# vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=500, special_tokens=["<|endoftext|>", "<|endoftext|><|endoftext|>"], num_processes=10)
+	vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-train.txt", vocab_size=2000, special_tokens=["<|endoftext|>"], num_processes=10)
 
+	tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
+	
+	with open("./data/TinyStoriesV2-GPT4-train.txt") as f:
+		text = f.read()
+	
+	encode = tok.encode(text)
+	decode = tok.decode(encode)
+	print(text == decode)
 
-	import json
-	import os
-	import resource
-	import sys
+	# import json
+	# import os
+	# import resource
+	# import sys
 
-	import psutil
-	import pytest
-	import tiktoken
+	# import psutil
+	# import pytest
+	# import tiktoken
 
-	from tests.adapters import get_tokenizer
-	from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+	# from tests.adapters import get_tokenizer
+	# from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
-	from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
+	# from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
 
-	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+	# VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	# MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	# TEST 1
+	# # TEST 1
 	# reference_tokenizer = tiktoken.get_encoding("gpt2")
 	# tokenizer = get_tokenizer_from_vocab_merges_path(
 	# 	vocab_path=VOCAB_PATH,
@@ -302,16 +318,16 @@ if __name__ == "__main__":
 	# assert reference_tokenizer.decode(reference_ids) == corpus_contents
 
 	# TEST 2
-	tokenizer = get_tokenizer_from_vocab_merges_path(
-		vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
-	)
-	test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
-	encoded_ids = tokenizer.encode(test_string)
-	tokenized_string = [tokenizer.decode([x]) for x in encoded_ids]
-	decoded_string = tokenizer.decode(encoded_ids)
-	# Ensure the special <|endoftext|> token is preserved
-	print(tokenized_string)
-	print(decoded_string)
-	print(test_string)
-	assert tokenized_string.count("<|endoftext|>") == 3
-	assert test_string == decoded_string
+	# tokenizer = get_tokenizer_from_vocab_merges_path(
+	# 	vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
+	# )
+	# test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+	# encoded_ids = tokenizer.encode(test_string)
+	# tokenized_string = [tokenizer.decode([x]) for x in encoded_ids]
+	# decoded_string = tokenizer.decode(encoded_ids)
+	# # Ensure the special <|endoftext|> token is preserved
+	# print(tokenized_string)
+	# print(decoded_string)
+	# print(test_string)
+	# assert tokenized_string.count("<|endoftext|>") == 3
+	# assert test_string == decoded_string
