@@ -34,7 +34,7 @@ def merge_dictionaries(dict_list):
 			merged[key] += value
 	return dict(merged)
 
-def get_all_pairs(t:tuple):
+def get_all_pairs(t:tuple|list):
 	return [(tok1, tok2) for tok1, tok2 in zip(t[:-1], t[1:])]
 
 def find_max(pair_counts, vocab):
@@ -161,15 +161,19 @@ def train_bpe_tokenizer(input_path:str, vocab_size:int, special_tokens:list[str]
 class Tokenizer:
 	def __init__(self, vocab:dict[int, bytes], bpe_merges:list[tuple[bytes,bytes]], special_tokens=None):
 		self.vocab = vocab
-		self.b_to_tok = {v:k for k, v in vocab.items()}
-		self.bpe_merges = [(self.b_to_tok[b1], self.b_to_tok[b2]) for (b1, b2) in bpe_merges]
+		self.i_vocab = {v:k for k, v in vocab.items()}
 		self.special_tokens = set() if special_tokens is None else sorted(set(special_tokens), key=len, reverse=True)
 		self.pre_token_cache = {}
 		self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
+		self.bpe_merges = {(self.i_vocab[b1], self.i_vocab[b2]):self.i_vocab[b1 + b2] for (b1, b2) in bpe_merges}
+		self.bpe_merges_ranks = {(self.i_vocab[tu[0]], self.i_vocab[tu[1]]):idx for idx, tu in enumerate(bpe_merges)}
+
 	def encode(self, text:str) -> list[int]:
 		if self.special_tokens is not None and len(self.special_tokens) > 0:
 			text = re.split("(" + "|".join([re.escape(tok) for tok in self.special_tokens]) + ")", text)
+		else:
+			text = [text]
 
 		pre_tokens = []
 		for split in tqdm(text):
@@ -181,14 +185,14 @@ class Tokenizer:
 		pre_token_bytes = []
 		for pre_tok in pre_tokens:
 			if pre_tok in self.special_tokens:
-				pre_token_bytes.append((self.b_to_tok[pre_tok.encode("utf-8")],))
+				pre_token_bytes.append((self.i_vocab[pre_tok.encode("utf-8")],))
 			else:
 				tmp = []
 				pre_tok_bytes = pre_tok.encode("utf-8")
 				for i in range(len(pre_tok_bytes)):
-					tmp.append(self.b_to_tok[pre_tok_bytes[i:i+1]])
+					tmp.append(self.i_vocab[pre_tok_bytes[i:i+1]])
 				pre_token_bytes.append(tuple(tmp))
-	
+
 		output_tokens = []
 		for tokens in tqdm(pre_token_bytes):
 			assert type(tokens) == tuple
@@ -196,20 +200,35 @@ class Tokenizer:
 				output_tokens.extend(self.pre_token_cache[tokens])
 			else:
 				old_tokens = list(tokens)
-
-				for token_id, merge in enumerate(self.bpe_merges):
+				
+				while True:
 					if len(old_tokens) == 1:
 						break
-					new_tokens = []
+					# find maximum ranked bpe pair
+					max_rank = float('inf')
+					max_pair = -1
+					for pair in get_all_pairs(old_tokens):
+						if pair in self.bpe_merges_ranks.keys():
+							rank = self.bpe_merges_ranks[pair]
+							if rank < max_rank:
+								max_rank = rank
+								max_pair = pair
 
+					if max_rank == float('inf'):
+						break
+					
+					merge = self.bpe_merges[max_pair]
+					
+					# substitute the bpe merge
 					idx = 0
+					new_tokens = []
 					while idx < len(old_tokens):
 						if idx == len(old_tokens)-1:
 							new_tokens.append(old_tokens[idx])
 							idx += 1
 						else:
-							if (old_tokens[idx], old_tokens[idx+1]) == merge:
-								new_tokens.append(self.b_to_tok[self.vocab[old_tokens[idx]] + self.vocab[old_tokens[idx+1]]])
+							if (old_tokens[idx], old_tokens[idx+1]) == max_pair:
+								new_tokens.append(merge)
 								idx += 2
 								continue
 							else:
@@ -255,25 +274,44 @@ if __name__ == "__main__":
 	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
 	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
-	reference_tokenizer = tiktoken.get_encoding("gpt2")
-	tokenizer = get_tokenizer_from_vocab_merges_path(
-		vocab_path=VOCAB_PATH,
-		merges_path=MERGES_PATH,
-	)
-	corpus_path = FIXTURES_PATH / "address.txt"
-	with open(corpus_path) as f:
-		corpus_contents = f.read()
+	# TEST 1
+	# reference_tokenizer = tiktoken.get_encoding("gpt2")
+	# tokenizer = get_tokenizer_from_vocab_merges_path(
+	# 	vocab_path=VOCAB_PATH,
+	# 	merges_path=MERGES_PATH,
+	# )
+	# corpus_path = FIXTURES_PATH / "address.txt"
+	# with open(corpus_path) as f:
+	# 	corpus_contents = f.read()
 	
-	corpus_contents = corpus_contents[:50]
-	reference_ids = reference_tokenizer.encode(corpus_contents)
-	ids = tokenizer.encode(corpus_contents)
+	# # corpus_contents = corpus_contents[:1500]
+	# reference_ids = reference_tokenizer.encode(corpus_contents)
+	# ids = tokenizer.encode(corpus_contents)
 
-	print("this is a print to check out test_address_matches_tiktoken")
-	print(reference_ids)
-	print(ids)
-	print(reference_tokenizer.decode(reference_ids))
-	print(tokenizer.decode(ids))
-	assert ids == reference_ids
+	# # print("decoding token 15137")
+	# # print(reference_tokenizer.decode([15137]))
 
-	assert tokenizer.decode(ids) == corpus_contents
-	assert reference_tokenizer.decode(reference_ids) == corpus_contents
+	# # print("this is a print to check out test_address_matches_tiktoken")
+	# # print(reference_ids)
+	# # print(ids)
+	# # print(reference_tokenizer.decode(reference_ids))
+	# # print(tokenizer.decode(ids))
+	# assert ids == reference_ids
+
+	# assert tokenizer.decode(ids) == corpus_contents
+	# assert reference_tokenizer.decode(reference_ids) == corpus_contents
+
+	# TEST 2
+	tokenizer = get_tokenizer_from_vocab_merges_path(
+		vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
+	)
+	test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+	encoded_ids = tokenizer.encode(test_string)
+	tokenized_string = [tokenizer.decode([x]) for x in encoded_ids]
+	decoded_string = tokenizer.decode(encoded_ids)
+	# Ensure the special <|endoftext|> token is preserved
+	print(tokenized_string)
+	print(decoded_string)
+	print(test_string)
+	assert tokenized_string.count("<|endoftext|>") == 3
+	assert test_string == decoded_string
