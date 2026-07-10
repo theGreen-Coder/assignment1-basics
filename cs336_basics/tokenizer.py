@@ -163,29 +163,24 @@ class Tokenizer:
 		self.vocab = vocab
 		self.b_to_tok = {v:k for k, v in vocab.items()}
 		self.bpe_merges = [(self.b_to_tok[b1], self.b_to_tok[b2]) for (b1, b2) in bpe_merges]
-		self.special_tokens = set() if special_tokens is None else set(special_tokens)
+		self.special_tokens = set() if special_tokens is None else sorted(set(special_tokens), key=len, reverse=True)
 		self.pre_token_cache = {}
 		self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 	def encode(self, text:str) -> list[int]:
 		if self.special_tokens is not None and len(self.special_tokens) > 0:
-			print("am I doing this?")
 			text = re.split("(" + "|".join([re.escape(tok) for tok in self.special_tokens]) + ")", text)
 
 		pre_tokens = []
 		for split in tqdm(text):
 			if split in self.special_tokens:
-				print("am I doing this?2")
 				pre_tokens.append(split)
 			else:
 				pre_tokens.extend(re.findall(self.PAT, split))
 		
 		pre_token_bytes = []
 		for pre_tok in pre_tokens:
-			print(pre_tok)
 			if pre_tok in self.special_tokens:
-				print("am I doing this?3")
-				print(pre_tok)
 				pre_token_bytes.append((self.b_to_tok[pre_tok.encode("utf-8")],))
 			else:
 				tmp = []
@@ -193,11 +188,6 @@ class Tokenizer:
 				for i in range(len(pre_tok_bytes)):
 					tmp.append(self.b_to_tok[pre_tok_bytes[i:i+1]])
 				pre_token_bytes.append(tuple(tmp))
-		
-		print("pritasfdoiasodf")
-		print(pre_token_bytes)
-		print()
-		print()
 	
 		output_tokens = []
 		for tokens in tqdm(pre_token_bytes):
@@ -207,7 +197,7 @@ class Tokenizer:
 			else:
 				old_tokens = list(tokens)
 
-				for token_id, merge in enumerate(self.bpe_merges):	
+				for token_id, merge in enumerate(self.bpe_merges):
 					if len(old_tokens) == 1:
 						break
 					new_tokens = []
@@ -242,49 +232,48 @@ class Tokenizer:
 		return byte_string.decode(encoding="utf-8", errors="replace")
 	
 if __name__ == "__main__":
-	vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=500, special_tokens=["<|endoftext|>"], num_processes=10)
-	# vocab, merges = train_bpe_tokenizer("data/owt_train.txt", vocab_size=32000, special_tokens=["<|endoftext|>"], num_processes=5)
-	# with open("test_vocab.json", "w") as f:
-	# 	json.dump(vocab, f).encode('utf8')
+	# vocab, merges = train_bpe_tokenizer("./data/TinyStoriesV2-GPT4-valid.txt", vocab_size=500, special_tokens=["<|endoftext|>", "<|endoftext|><|endoftext|>"], num_processes=10)
+
+
+	import json
+	import os
+	import resource
+	import sys
+
+	import psutil
+	import pytest
+	import tiktoken
+
+	from tests.adapters import get_tokenizer
+	from tests.common import FIXTURES_PATH, gpt2_bytes_to_unicode
+
+	from tests.test_tokenizer import get_tokenizer_from_vocab_merges_path
+
+	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+
+	VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+	MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
+
+	reference_tokenizer = tiktoken.get_encoding("gpt2")
+	tokenizer = get_tokenizer_from_vocab_merges_path(
+		vocab_path=VOCAB_PATH,
+		merges_path=MERGES_PATH,
+	)
+	corpus_path = FIXTURES_PATH / "address.txt"
+	with open(corpus_path) as f:
+		corpus_contents = f.read()
 	
-	# with open("test_merges.json", "w") as f:
-	# 	json.dump(merges, f).encode('utf8')
-	
-	# vocab_words = vocab.values()
-	# print(sorted(vocab_words, key=len, reverse=True))
-	# pass
+	corpus_contents = corpus_contents[:50]
+	reference_ids = reference_tokenizer.encode(corpus_contents)
+	ids = tokenizer.encode(corpus_contents)
 
-	with open("./data/TinyStoriesV2-GPT4-valid.txt", "r", encoding="utf-8") as f:
-		text = f.read()
-	
-	text = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+	print("this is a print to check out test_address_matches_tiktoken")
+	print(reference_ids)
+	print(ids)
+	print(reference_tokenizer.decode(reference_ids))
+	print(tokenizer.decode(ids))
+	assert ids == reference_ids
 
-	# text = text[:2068]
-	tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
-
-
-	test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
-	encoded_ids = tok.encode(test_string)
-	print(test_string)
-	print(f"Special token: {tok.b_to_tok["<|endoftext|>".encode("utf-8")]}")
-	print(encoded_ids)
-	tokenized_string = [tok.decode([x]) for x in encoded_ids]
-	# Ensure the special <|endoftext|> token is preserved
-	assert tokenized_string.count("<|endoftext|>") == 3
-
-	decoded_string = tok.decode(encoded_ids)
-	assert test_string == decoded_string
-
-
-
-
-
-	# split_special_tokens = re.split("|".join([re.escape(tok) for tok in ["<|endoftext|>"]]), text)
-	# text2 = "".join(split_special_tokens)
-
-	# print("Encoding!")
-	# encoding = tok.encode(text)
-	# # print(encoding)
-	# decoding = tok.decode(encoding)
-	# # print(decoding)
-	# print(decoding == text2)
+	assert tokenizer.decode(ids) == corpus_contents
+	assert reference_tokenizer.decode(reference_ids) == corpus_contents
